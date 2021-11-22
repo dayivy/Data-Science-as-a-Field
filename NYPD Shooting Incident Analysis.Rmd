@@ -1,0 +1,172 @@
+---
+title: "NYPD Shooting Incidents Analysis"
+author: "D. Ivy"
+date: "November 22, 2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Overview
+
+List of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year.
+
+This is a breakdown of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location and time of occurrence. In addition, information related to suspect and victim demographics is also included. This data can be used by the public to explore the nature of shooting/criminal activity.
+
+## Step 1: Read in data from the website
+
+
+```{r load_data, echo=TRUE}
+#Get data from website
+url<-"https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+
+#Assign data to a dataframe
+data<-read.csv(url)
+
+#Dataframe shape
+dim(data)
+
+#Dataframe columns
+colnames(data)
+```
+
+## Step 2: Tidy and Transform Data
+
+A detailed description of the data and what the column headers mean can be found here: <https://data.cityofnewyork.us/Public-Safety/NYPD-Shooting-Incident-Data-Historic-/833y-fsy8>
+
+The incident key variable is random so, by design, should not give us any information and we can remove this.  We see there are several variables related to the location of the shooting.  These are likely to be beyond the scope of this analysis so we can remove them.  I have also chosen to remove the OCCUR_TIME variable.  I dont plan on using the time in this analysis in any fashion.  After this initial parsing of the data, lets take a look to see what we are left with.
+
+```{r clean_data_1, echo=TRUE}
+
+data_cleaned<-subset(data,select=-c(INCIDENT_KEY,OCCUR_TIME,X_COORD_CD,Y_COORD_CD,Latitude,Longitude,Lon_Lat))
+
+head(data_cleaned)
+```
+
+We see that the OCCUR_DATE variable needs to be read in as a date, the STATISTICAL_MURDER_FLAG variable is boolean, and all others are categorical.
+
+```{r clean_data_2, echo=TRUE}
+data_cleaned$OCCUR_DATE<-as.Date(data_cleaned$OCCUR_DATE,format="%m/%d/%Y")
+
+data_cleaned$STATISTICAL_MURDER_FLAG<-as.integer(as.logical(data_cleaned$STATISTICAL_MURDER_FLAG))
+non_factor_cols<-c("OCCUR_DATE","STATISTICAL_MURDER_FLAG")
+factor_cols<-names(data_cleaned[names(data_cleaned)%in%non_factor_cols==FALSE])
+
+data_cleaned[factor_cols]<-lapply(data_cleaned[factor_cols],as.factor)
+```
+
+We can now view the summary of the dataset to determine the next steps
+
+```{r clean_data_3, echo=TRUE}
+summary(data_cleaned)
+```
+
+There are two NAs in JURISDICTION_CODE.  Given the large dataset, I think we can just remove these 2 observations without changing the results of any analysis we do.  LOCATION_DESC has many categories and likely isnt going to tell us much so will remove that variable as well.
+
+The 3 different PERP variables (age, sex, race) are somewhat sparse, perhaps these are unsolved cases at the time of input into the database.  These variables have blanks as well as UNKNOWN or U entries.  I will combine all of these entries into UNKNOWN or U.
+
+```{r clean_data_5, echo=TRUE}
+
+data_cleaned<-subset(data_cleaned,select=-c(LOCATION_DESC))
+data_cleaned<-na.omit(data_cleaned)
+
+data_cleaned$PERP_AGE_GROUP[data_cleaned$PERP_AGE_GROUP==""]<-"UNKNOWN"
+data_cleaned$PERP_SEX[data_cleaned$PERP_SEX==""]<-"U"
+data_cleaned$PERP_RACE[data_cleaned$PERP_RACE==""]<-"UNKNOWN"
+
+summary(data_cleaned)
+```
+
+So, we see here we have a clean dataset and can continue onto visualizations and analysis.
+
+## Step 3: Visualizations and Analysis
+
+For the first couple of visualizations, I want to check for possible seasonality in the data. Do more shootings occur on the weekends?  What about during the summer months?
+
+```{r data_vis_1, echo=TRUE}
+library(ggplot2)
+data_cleaned$Weekday<-weekdays(data_cleaned$OCCUR_DATE)
+data_cleaned$Weekday<-factor(data_cleaned$Weekday,c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"))
+
+g_weekdays<-ggplot(data=data_cleaned,aes(data_cleaned$Weekday,fill=data_cleaned$Weekday))+geom_bar()
+g_weekdays<-g_weekdays+theme_bw()+theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank())+labs(fill="")+xlab("Day of Week")+ggtitle("Shootings by Days of the Week")
+g_weekdays
+
+
+data_cleaned$Months<-months(data_cleaned$OCCUR_DATE)
+data_cleaned$Months<-factor(data_cleaned$Months,c("January","February","March","April","May","June","July","August","September","October","November","December"))
+
+g_months<-ggplot(data=data_cleaned,aes(data_cleaned$Months,fill=data_cleaned$Months))+geom_bar()
+g_months<-g_months+theme_bw()+theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank())+labs(fill="")+xlab("Month of Year")+theme(axis.text=element_blank())+ggtitle("Shootings by Month of the Year")
+g_months
+```
+
+We can clearly see that there appear to be more shootings on the weekends and during the warmer months of the year.
+
+For the next visualization, I would like to look into the racial breakdown of shootings by Boro.
+
+```{r data_vis_2, echo=TRUE}
+g_boro<-ggplot(data_cleaned,aes(BORO,fill=VIC_RACE))+geom_bar(position="stack")
+g_boro<-g_boro+theme_bw()+theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank())+labs(fill="Race of Victim")+xlab("")+ggtitle("Shootings By Boro")+theme(axis.text.x = element_text(angle=45,hjust=1))
+g_boro
+```
+
+We can see here that most shooting victims, by far, were Black.  We also see very little difference in the victims racial identification based on the Boro in which the incident took place.
+
+### Analysis
+
+For analysis, I would like to run a logistic regression to predict how likely an incident will be a homicide, given the other variables available.  An analysis like this could help the NYPD send the correct crime scene investigation unit to a reported incident.
+
+```{r analysis_1, echo=TRUE}
+#Percent of calls that are murders
+perc_murders<-sum(data_cleaned$STATISTICAL_MURDER_FLAG)/nrow(data_cleaned)
+perc_murders
+```
+
+We immediately see there may be an issue of the dataset being unbalanced (there are far more shootings not resulting in murders that there are shootings that do result in a murder).  The problems that this may cause are likely beyond the scope of this course so I will just ignore this issue for now and proceed as if the dataset were balanced.
+
+```{r analysis_2, echo=TRUE}
+#split training and testing sets
+set.seed(12345)
+train_idx<-sample(nrow(data_cleaned),size=0.8*nrow(data_cleaned),replace=FALSE)
+train_set<-data_cleaned[train_idx,]
+test_set<-data_cleaned[-train_idx,]
+
+#fit logistic regression model for binary classification on training set
+lr_model_full<-glm(STATISTICAL_MURDER_FLAG~BORO+JURISDICTION_CODE+VIC_AGE_GROUP+VIC_RACE+VIC_SEX-1,data=train_set, family="binomial")
+lr_model<-glm(STATISTICAL_MURDER_FLAG~JURISDICTION_CODE+VIC_AGE_GROUP+VIC_SEX-1,data=train_set, family="binomial")
+
+summary(lr_model_full)
+
+summary(lr_model)
+```
+
+I ran several models but only included two here for simplicity and comparison.  We see fromthe full model, BORO and VIC_RACE are unlikely to be significant, while VIC_SEX is very borderline.  JURISDICTION_CODE and VIC_AGE both appear to be very significant.  This makes some sense.  Older victims are less likely to survive being shot (hence the higher coefficient indicating a higher probability this incident will result in a murder).  What is interesting is shootings in the housing projects are less likely to be murder that those incidents on the transit system.  I would not have expected this, but perhaps this indicates the shootings in the transit system are much more likely to be at close range (and hence more deadly), while shootings in the housing projects could also very likely include accidental, self inflicted wounds.
+
+```{r analysis_3, echo=TRUE}
+
+preds<-predict(lr_model,newdata=test_set)
+preds<-exp(preds)
+binary_prediction<-ifelse(preds>0.5,1,0)
+true_vals<-test_set$STATISTICAL_MURDER_FLAG
+accuracy<-mean(true_vals==binary_prediction)
+accuracy
+
+```
+
+So, we see an accuracy of our predictions of approximately 80%.  This is an okay starting point, but doesnt really improve on the naive model of just assuming no shooting incident is a murder (remember only about 19% of the incidents were murders).  This is likely a problem of having the class imbalance in the training set.  Perhaps oversampling the minority class of our response variable will hep improve the number.
+
+### Step 4: Identifying Biases
+
+For this task, I initially wanted to look at any possible seasonality of these incidents.  I had an inclination that weekends and summer months were going to have more incidents, but I tried to mitigate my personal assumptions and let the numbers speak for themselves.  If anything, they confirmed my expectations.  It was interesting to see that victime race was not really a significant predictor according to the model, however the model clearly needs improvement and the data may not be the most trustworthy either as discussed below.
+
+There are potentially significant sources of bias in the dat.  The overwhelming majority of shooting victims were listed as Black.  This seemed odd.  The proportion of victims was significantly higher than the actual black population of New York City and also significantly higher than the other possible racial classifications in the study.  We must question how this information is observed and confirmed.  Are shooting victims actually filling out this information while they suffer from this traumatic experience?  Is it simply the responding officer filling in this information solely based off observation?  How do they know a person flagged as Blag is not, in fact, Black Hispanic?  Similarly, will a fairer skinned victim be marked White Hispanic even if they are not of Hispanic descent?  The significant racial component of this data has a very high likelihood of being affected by racial biases.
+
+## Session Info:
+```{r sessionInfo, echo=TRUE}
+sessionInfo()
+```
+
+
