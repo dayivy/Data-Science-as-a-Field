@@ -1,0 +1,236 @@
+---
+title: "COVID-19 Analysis"
+author: "D. Ivy"
+date: "November 26, 2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## Overview
+
+I am using the same Johns Hopkins data that we used in class.  Because we should all be familiar with the data, I wont go into too much detail about where it comes from or how it was acquired.  For that information, you can look at the *[Johns Hopkins github site](https://github.com/CSSEGISandData/COVID-19/tree/master/csse_covid_19_data)*
+
+##Loading and Cleaning Data
+
+As we saw in lecture, I will start by loading the package "tidyverse" and read in the data from the four main csv files.
+
+```{r get_jhu_data, echo=TRUE}
+library(tidyverse)
+library(lubridate)
+#Get data from 4 main files
+
+#They all begin the same way
+url_in<-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+
+file_names<-c("time_series_covid19_confirmed_global.csv",
+              "time_series_covid19_deaths_global.csv",
+              "time_series_covid19_confirmed_US.csv",
+              "time_series_covid19_deaths_US.csv")
+
+urls<-str_c(url_in,file_names)
+```
+
+Let's read in the data and see what we have
+
+```{r import_data, echo=TRUE,message=FALSE}
+global_cases<-read_csv(urls[1])
+global_deaths<-read_csv(urls[2])
+US_cases<-read_csv(urls[3])
+US_deaths<-read_csv(urls[4])
+```
+
+After looking to make sure the intial data formatting is the same as we saw in lecture, we can proceed to clean the data in the same fashion as we saw before. Also, I will add the population data for the global cases.  This may be necessary for the analysis later.
+
+```{r tidy_global_data, echo=TRUE}
+head(global_cases)
+head(global_deaths)
+
+#We see we need to convert the date columns into 1 column.  Also we can get rid of the Lat and Long variables
+global_cases<-global_cases%>%pivot_longer(cols=-c('Province/State','Country/Region',Lat,Long),names_to="date",values_to="cases")%>%select(-c(Lat,Long))
+
+global_deaths<-global_deaths%>%pivot_longer(cols=-c('Province/State','Country/Region',Lat,Long),names_to="date",values_to="deaths")%>%select(-c(Lat,Long))
+
+#Combine cases and deaths into one tibble
+global<-global_cases%>%full_join(global_deaths)%>%rename(Country_Region='Country/Region',Province_State='Province/State')%>%mutate(date=mdy(date))
+
+#Filter out dates with 0 cases
+global<-global%>%filter(cases>0)
+
+#create combined key column to match format of US data
+global<-global%>%unite("Combined_Key",c(Province_State,Country_Region),sep=", ",na.rm=TRUE, remove=FALSE)
+
+#Add population data
+UID_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+
+UID <- read_csv(UID_lookup_url)%>%select(-c(Lat,Long_,Combined_Key, code3, iso2, iso3, Admin2))
+
+global <- global%>%left_join(UID, by=c("Province_State","Country_Region"))
+
+global<- global%>%select(-c(UID, FIPS))%>%select(Province_State, Country_Region,date,cases, deaths, Population,Combined_Key)
+
+#view results
+global
+
+summary(global)
+```
+
+We can repeat this process for the US only data.  Note the population data already exists (but only on the deaths file).
+
+```{r tidy_US_data, echo=TRUE}
+head(US_cases)
+head(US_deaths)
+
+US_cases<-US_cases%>%pivot_longer(cols=-(UID:Combined_Key),names_to="date",values_to="cases")
+
+US_deaths<-US_deaths%>%pivot_longer(cols=-(UID:Population),names_to="date",values_to="deaths")
+
+#We are not going to want to keep the first 5 columns nor the location variables, also we must convert the date to proper date format for R to work with
+
+US_cases<-US_cases%>%select(Admin2:cases)%>%mutate(date=mdy(date))%>%select(-c(Lat,Long_))
+
+US_deaths<-US_deaths%>%select(Admin2:deaths)%>%mutate(date=mdy(date))%>%select(-c(Lat,Long_))
+
+
+#combining the two tibbles
+US<-US_cases%>%full_join(US_deaths)
+US<-US%>%filter(cases>0)
+
+US
+
+summary(US)
+```
+
+Ok, the data looks clean and ready to use.  The NAs and 0s for population in the dataframes were concerning, but I looked into them and they do seem to make some sort of sense.  For instance, one region listed as NA population is the Olympic Village, which was more of a temporary settlement/gathering.  We need to be careful in the analysis that we arent including these observations as it could affect the results.
+
+## Visualizations
+
+I am beginning this analysis on Friday, November 26th.  A major occurrence has happened over the past 24 hours with a new variant emerging rapidly in South Africa which has begun to stir worldwide fears again (financial markets are selling off sharply this morning, countries are banning flights from certain other nations, etc.)   
+
+For my visualizations, I want to look at COVID-19 cases in South Africa, as well as in my state of New Jersey and the tri-state area as a whole (New Jersey, New York, and Connecticut).  
+
+```{r South_Africa_cases, echo=TRUE}
+SA<-global%>%filter(Country_Region=="South Africa")
+SA<-SA%>%group_by(date)%>%summarize(cases=sum(cases), deaths=sum(deaths),Population=sum(Population))%>%mutate(deaths_per_mill=(deaths/Population)*1000000)%>%ungroup()
+
+SA_plot<-SA%>%ggplot(aes(x=date, y=cases))+geom_line(aes(color="cases"))+geom_point(aes(color="cases"))+
+  geom_line(aes(y=deaths,color="deaths"))+geom_point(aes(y=deaths,color="deaths"))+scale_y_log10()
+SA_plot<-SA_plot+labs(title="COVID-19 in South Africa",y=NULL)+theme(legend.position = "bottom")
+SA_plot<-SA_plot+theme(axis.text.x=element_text(angle=90))
+SA_plot
+```
+
+```{r US_by_state, echo=TRUE}
+
+US_by_state<-US%>%group_by(Province_State,Country_Region,date)%>%summarize(cases=sum(cases),deaths=sum(deaths),Population=sum(Population))%>%mutate(deaths_per_mill=(deaths/Population)*1000000)%>%select(Province_State,Country_Region,date,cases,deaths,deaths_per_mill,Population)%>%ungroup()
+```
+
+
+
+
+```{r New_Jersey_Cases, echo=TRUE}
+state<-"New Jersey"
+NJ<-US_by_state%>%filter(Province_State==state)%>%ggplot(aes(x=date, y=cases))+geom_line(aes(color="cases"))+geom_point(aes(color="cases"))+
+  geom_line(aes(y=deaths,color="deaths"))+geom_point(aes(y=deaths,color="deaths"))+scale_y_log10()
+
+NJ<-NJ+labs(title="COVID-19 in New Jersey",y=NULL)+theme(legend.position = "bottom")
+NJ<-NJ+theme(axis.text.x=element_text(angle=90))
+NJ
+```
+
+
+```{r TriState_Cases, echo=TRUE}
+states<-c("New Jersey","New York","Connecticut")
+TriState<-US_by_state%>%filter(Province_State %in% states)
+
+TriState<-TriState%>%group_by(Country_Region, date)%>%summarize(cases=sum(cases),deaths=sum(deaths),Population=sum(Population))%>%
+  mutate(deaths_per_mill=(deaths/Population)*1000000)%>%select(Country_Region,date,cases,deaths,deaths_per_mill,Population)%>%ungroup()
+
+TriState<-TriState%>%ggplot(aes(x=date, y=cases))+geom_line(aes(color="cases"))+geom_point(aes(color="cases"))+
+  geom_line(aes(y=deaths,color="deaths"))+geom_point(aes(y=deaths,color="deaths"))+scale_y_log10()
+
+TriState<-TriState+labs(title="COVID-19 in Tri State Area",y=NULL)+theme(legend.position = "bottom")
+TriState<-TriState+theme(axis.text.x=element_text(angle=90))
+TriState
+```
+
+So, we can see that cases and deaths seem to still be increasing in South Africa while it appears that both cases and deaths have leveled out in the US.  Let's dig into this a bit deeper with some analysis to see if this new variant from South Africa is really something we should be worried about.
+
+## Analysis
+
+For the analysis, I want to take the difference between the rate of new cases and new deaths in both South Africa and New Jersey.  If we see that this difference is increasing, it means the situation in South Africa is getting worse at a faster rate than the situation in the US state of New Jersey.
+
+```{r analysis_NJ, echo=TRUE}
+
+NJ_data<-US_by_state%>%filter(Province_State=="New Jersey")%>%
+  mutate(cases_per_mill=(cases/Population)*1000000)%>%
+  mutate(new_cases=cases_per_mill-lag(cases_per_mill),new_deaths=deaths_per_mill-lag(deaths_per_mill))
+
+NJ_analysis<-NJ_data%>%ggplot(aes(x=date, y=new_cases))+
+  geom_line(aes(color="new_cases"))+geom_point(aes(color="new_cases"))+
+  geom_line(aes(y=new_deaths,color="new_deaths"))+
+  geom_point(aes(y=new_deaths,color="new_deaths"))+scale_y_log10()
+
+NJ_analysis<-NJ_analysis+labs(title="New COVID-19 Cases and Deaths per Million in New Jersey",y=NULL)+
+  theme(legend.position = "bottom")
+
+NJ_analysis<-NJ_analysis+theme(axis.text.x=element_text(angle=90))
+NJ_analysis
+```
+
+```{r analysis_SA, echo=TRUE}
+SA_data<-SA%>%mutate(cases_per_mill=(cases/Population)*1000000)%>%
+  mutate(new_cases=cases_per_mill-lag(cases_per_mill),new_deaths=deaths_per_mill-lag(deaths_per_mill))
+
+SA_analysis<-SA_data%>%ggplot(aes(x=date, y=new_cases))+
+  geom_line(aes(color="new_cases"))+geom_point(aes(color="new_cases"))+
+  geom_line(aes(y=new_deaths,color="new_deaths"))+
+  geom_point(aes(y=new_deaths,color="new_deaths"))+scale_y_log10()
+
+SA_analysis<-SA_analysis+labs(title="New COVID-19 Cases and Deaths per Million in South Africa",y=NULL)+theme(legend.position = "bottom")
+
+SA_analysis<-SA_analysis+theme(axis.text.x=element_text(angle=90))
+SA_analysis
+
+```
+
+```{r compare_growth_rates, echo=TRUE}
+#combine NJ and SA data
+NJ_selection<-NJ_data%>%select(c(date,new_cases,new_deaths))%>%rename(NJ_new_cases=new_cases,NJ_new_deaths=new_deaths)
+
+SA_selection<-SA_data%>%select(c(date,new_cases,new_deaths))%>%rename(SA_new_cases=new_cases,SA_new_deaths=new_deaths)
+Combined_data<-NJ_selection%>%full_join(SA_selection)
+
+#take diff in new_cases and new_deaths
+Combined_data<-Combined_data%>%mutate(diff_cases=SA_new_cases-NJ_new_cases,diff_deaths=SA_new_deaths-NJ_new_deaths)
+#plot to see if diff is growing
+
+Combined_analysis_cases<-Combined_data%>%filter(date>as.Date("2021-05-01"))%>%ggplot(aes(x=date, y=diff_cases))+
+  geom_line(aes(color="diff_cases"))+geom_point(aes(color="diff_cases"))
+
+Combined_analysis_cases
+
+Combined_analysis_deaths<-Combined_data%>%filter(date>as.Date("2021-05-01"))%>%ggplot(aes(x=date, y=diff_deaths))+
+  geom_line(aes(color="diff_deaths"))+geom_point(aes(color="diff_deaths"))
+
+Combined_analysis_deaths
+
+```
+
+So, we see that in July, the South African rates of cases and deaths were significantly higher than in New Jersey.  It could be very possible that during these months is when the new variant first appeared as there does seem to be a sharp increase in the difference.  Also, it is worth noting that the summer months in the northern hemisphere are the winter months in the southern hemisphere.  It is possible that the decrease in the difference over the past few months could be a result of children returning to school and temperatures decreasing (leading to more indoor activities) in New Jersey while the opposite effect was happening in South Africa.
+
+## Identifying Biases
+
+## Github Link
+
+The R markdown document of this analysis can be found on my Github page:
+<https://github.com/dayivy/Data-Science-as-a-Field>
+
+## Session Info
+
+```{r sessionInfo, echo=TRUE}
+sessionInfo()
+```
