@@ -211,10 +211,18 @@ Combined_data<-Combined_data%>%mutate(diff_cases=SA_new_cases-NJ_new_cases,diff_
 Combined_analysis_cases<-Combined_data%>%filter(date>as.Date("2021-05-01"))%>%ggplot(aes(x=date, y=diff_cases))+
   geom_line(aes(color="diff_cases"))+geom_point(aes(color="diff_cases"))
 
+Combined_analysis_cases<-Combined_analysis_cases+labs(title="Difference In Rate of New Cases",y=NULL)+theme(legend.position = "bottom")
+
+Combined_analysis_cases<-Combined_analysis_cases+theme(axis.text.x=element_text(angle=90))
+
 Combined_analysis_cases
 
 Combined_analysis_deaths<-Combined_data%>%filter(date>as.Date("2021-05-01"))%>%ggplot(aes(x=date, y=diff_deaths))+
   geom_line(aes(color="diff_deaths"))+geom_point(aes(color="diff_deaths"))
+
+Combined_analysis_deaths<-Combined_analysis_deaths+labs(title="Difference In Rate of New Deaths",y=NULL)+theme(legend.position = "bottom")
+
+Combined_analysis_deaths<-Combined_analysis_deaths+theme(axis.text.x=element_text(angle=90))
 
 Combined_analysis_deaths
 
@@ -223,6 +231,10 @@ Combined_analysis_deaths
 So, we see that in July, the South African rates of cases and deaths were significantly higher than in New Jersey.  It could be very possible that during these months is when the new variant first appeared as there does seem to be a sharp increase in the difference.  Also, it is worth noting that the summer months in the northern hemisphere are the winter months in the southern hemisphere.  It is possible that the decrease in the difference over the past few months could be a result of children returning to school and temperatures decreasing (leading to more indoor activities) in New Jersey while the opposite effect was happening in South Africa.
 
 ## Identifying Biases
+
+I am not entirely certain how the data is obtained from various countries.  I assume thy are coming from all sorts of different sources, with potentially differnt lags in reporting.  
+
+Also, a major potential bias is the cost and access to healthcare.  It is possible the US is reporting more cases since testing is widely available, while I am not certain of the ease of accessibility to testing and healthcare in South Africa.  If there is a barrier to access, citizens may not get tested unless they are showing symptoms, thus adding a bias to the case observations (if symptomatic, its more likely the patient has Covid).
 
 ## Github Link
 
